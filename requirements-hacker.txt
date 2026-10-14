@@ -1,0 +1,4 @@
+# HomeGuard AI - hacker laptop (Laptop B) ONLY.
+# Copy the hacker/ folder plus this file to Laptop B. Nothing else is needed.
+# nmap (optional) is a system install, not a pip package.
+requests>=2.31

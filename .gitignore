@@ -1,0 +1,25 @@
+# HomeGuard AI
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Data and models are large / regenerated; never commit (dirs kept via .gitkeep).
+data/
+models/
+
+# Runtime artifacts
+logs/*.jsonl
+reports/*.png
+*.pcap
+*.pcapng
+client/.pids
+client/servers.log
+client/_ftproot/
+hacker/hacker_log.jsonl
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

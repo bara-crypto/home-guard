@@ -1,0 +1,16 @@
+# HomeGuard AI - full stack (Laptop A client/agent + Laptop C dev/trainer)
+# Install into a venv:  python -m venv .venv ; .venv\Scripts\activate ; pip install -r requirements.txt
+pandas>=2.0
+pyarrow>=14.0
+scikit-learn>=1.3
+xgboost>=2.0
+joblib>=1.3
+huggingface_hub>=0.23
+scapy>=2.5
+cicflowmeter>=0.2.0
+fastapi>=0.110
+uvicorn>=0.29
+requests>=2.31
+pyftpdlib>=1.5
+psutil>=5.9
+matplotlib>=3.7
