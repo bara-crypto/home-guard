@@ -105,6 +105,37 @@ def main() -> int:
         record("2. verdicts appended to logs/verdicts.jsonl", after > before,
                f"{before}->{after} bytes")
 
+        # 2b) decision pipeline: confident attack -> confirm -> remediate; benign -> silent; IF loaded
+        record("2b. isolation forest loaded", bool(health.get("isolation_forest")))
+        dec_log = ROOT / "logs" / "decisions.jsonl"
+        dec_before = dec_log.stat().st_size if dec_log.exists() else 0
+        # fresh src_ip to avoid the cooldown from the step-2 POSTs
+        atk = {"src_ip": "10.0.0.77", "dst_ip": "10.0.0.9", "src_port": 5555, "dst_port": 8080,
+               "protocol": 6, "flow_duration": 0.05, "tot_fwd_pkts": 320, "tot_bwd_pkts": 160,
+               "totlen_fwd_pkts": 9200, "totlen_bwd_pkts": 3700, "flow_pkts_s": 6200, "flow_byts_s": 185000}
+        rd = requests.post("http://127.0.0.1:8001/predict", json=atk, timeout=5).json()
+        outcome = rd[0].get("outcome")
+        tok = rd[0].get("token")
+        record("2b. confident attack -> known_threat_confirm", outcome == "known_threat_confirm",
+               json.dumps(rd[0]))
+        if tok:
+            c = requests.get("http://127.0.0.1:8001/confirm",
+                             params={"token": tok, "action": "yes"}, timeout=5)
+            rem_log = ROOT / "logs" / "remediations.jsonl"
+            rem_ok = rem_log.exists() and "dry_run" in rem_log.read_text().splitlines()[-1]
+            record("2b. confirm -> remediation (dry-run, no real block)",
+                   c.ok and "Blocking" in c.text and rem_ok)
+        else:
+            record("2b. confirm -> remediation (dry-run, no real block)", False, "no token issued")
+        ben = {"src_ip": "10.0.0.5", "dst_ip": "10.0.0.9", "src_port": 5001, "dst_port": 443,
+               "protocol": 6, "flow_duration": 5.0, "tot_fwd_pkts": 40, "tot_bwd_pkts": 20,
+               "totlen_fwd_pkts": 3000, "totlen_bwd_pkts": 1200, "flow_pkts_s": 8, "flow_byts_s": 600}
+        rb = requests.post("http://127.0.0.1:8001/predict", json=ben, timeout=5).json()
+        record("2b. benign flow -> benign_silent (no alert)", rb[0].get("outcome") == "benign_silent",
+               json.dumps(rb[0]))
+        dec_after = dec_log.stat().st_size if dec_log.exists() else 0
+        record("2b. decisions logged to logs/decisions.jsonl", dec_after > dec_before)
+
         # 3) benign for 15s
         b = subprocess.run([PY, str(CLIENT), "benign", "--duration", "15"],
                            cwd=str(ROOT), capture_output=True, text=True, timeout=60)

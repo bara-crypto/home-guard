@@ -17,6 +17,10 @@ client/.pids
 client/servers.log
 client/_ftproot/
 hacker/hacker_log.jsonl
+hacker/lure_log.jsonl
+
+# agent secrets (SMTP / Telegram) — never commit
+agent/config.json
 
 # OS / editor
 .DS_Store

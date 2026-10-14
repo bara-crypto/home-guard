@@ -133,3 +133,25 @@ def save_model(model, feature_cols, model_path: Path, features_path: Path) -> No
     features_path.write_text(json.dumps(list(feature_cols), indent=2), encoding="utf-8")
     print(f"Saved model -> {model_path}")
     print(f"Saved features -> {features_path}")
+
+
+def train_isolation_forest(benign_X):
+    """Unsupervised anomaly detector trained on BENIGN flows only.
+
+    Used by the agent to verify low-confidence / benign-labelled flows:
+    predict() returns 1 for normal and -1 for an anomaly (possible unknown threat).
+    """
+    from sklearn.ensemble import IsolationForest
+
+    return IsolationForest(
+        n_estimators=200, contamination="auto", random_state=42, n_jobs=-1
+    ).fit(benign_X)
+
+
+def save_iforest(model, feature_cols, model_path: Path, features_path: Path) -> None:
+    import joblib
+
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(model, model_path)
+    features_path.write_text(json.dumps(list(feature_cols), indent=2), encoding="utf-8")
+    print(f"Saved isolation forest -> {model_path}")

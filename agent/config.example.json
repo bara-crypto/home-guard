@@ -1,0 +1,34 @@
+{
+  "_comment": "Copy to agent/config.json (gitignored) and fill in. Any field left as-is keeps the default. You can also set HOMEGUARD_* env vars instead.",
+
+  "confirm_threshold": 0.80,
+  "notify_cooldown_seconds": 300,
+  "confirm_timeout_seconds": 120,
+  "auto_remediate_on_timeout": false,
+
+  "remediation": {
+    "enabled": true,
+    "dry_run": true,
+    "_comment": "dry_run=true -> the agent logs the firewall command it WOULD run and never changes the system. Set false to actually block the attacker IP (netsh on Windows / iptables on Linux). Only private/loopback IPs are ever eligible."
+  },
+
+  "email": {
+    "enabled": false,
+    "smtp_host": "smtp.gmail.com",
+    "smtp_port": 465,
+    "user": "your_gmail_address@gmail.com",
+    "password": "your_16_char_app_password",
+    "from": "your_gmail_address@gmail.com",
+    "to": "balac6796@gmail.com",
+    "_comment": "Gmail requires a 16-char App Password (Google Account > Security > App passwords), not your normal password. For the email 'Confirm' link to be clickable from another device, run the agent with --api-host 0.0.0.0 and set api_public_base to http://<laptopA_LAN_ip>:8001."
+  },
+
+  "telegram": {
+    "enabled": false,
+    "bot_token": "123456:ABC-your-bot-token-from-@BotFather",
+    "chat_id": "123456789",
+    "_comment": "Create a bot with @BotFather to get bot_token. Get chat_id by messaging your bot then visiting https://api.telegram.org/bot<token>/getUpdates. Telegram is the easiest confirm channel: inline Yes/No buttons, no inbound server needed."
+  },
+
+  "api_public_base": ""
+}

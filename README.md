@@ -26,12 +26,31 @@ homeguard/
 ├─ reports/          # metrics, confusion matrices, column lists
 ├─ src/              # 01_download, 02_explore, 03_learn_features, 03_train, 04_train_lab, trainer
 ├─ lab/              # capture.py, convert.py, run_cicflowmeter.py (extractor wrapper)
-├─ agent/            # api.py, run_agent.py, infer.py  (Laptop A)
+├─ agent/            # api.py, run_agent.py, infer.py, decision.py, notify.py,
+│                    #   remediate.py, settings.py, config.example.json  (Laptop A)
 ├─ client/           # client_intent.py  (Laptop A, standalone)
-├─ hacker/           # hacker_intent.py  (Laptop B, standalone, copyable alone)
+├─ hacker/           # hacker_intent.py + lure_server.py  (Laptop B, standalone)
 ├─ tests/            # verify_client.py, verify_hacker.py
-└─ docs/             # CLIENT_SETUP, HACKER_SETUP, TEST_PLAN
+└─ docs/             # CLIENT_SETUP, HACKER_SETUP, TEST_PLAN,
+                     #   DETECTION_PIPELINE, MALICIOUS_SITE_LAB, RUNBOOK_A_B
 ```
+
+## Detection pipeline (what the agent does per flow)
+
+Random Forest classifies each flow, then:
+
+- **attack, confidence ≥ 80%** → confirm alert (Telegram buttons / email links) with the
+  confidence score + description → on **Yes** (or timeout auto-fix) the attacker IP is
+  dropped at the OS firewall.
+- **attack, confidence < 80%** → **Isolation Forest** decides: anomaly → *unknown threat*
+  alert; normal → silent.
+- **benign** → Isolation Forest verifies: anomaly → *unknown threat* alert; normal → silent.
+
+Nothing is sent to the cloud — unknown threats are reported locally + by email/telegram
+only. Remediation is **dry-run by default**. Full details: `docs/DETECTION_PIPELINE.md`.
+Notifications and remediation are config-driven (`agent/config.example.json` →
+`agent/config.json`); with nothing configured the agent runs log-only so it's fully
+testable without secrets.
 
 ## Quick start (dev machine)
 

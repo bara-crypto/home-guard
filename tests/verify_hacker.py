@@ -106,12 +106,45 @@ def main() -> int:
         record("4. refuses --duration over cap", g3.returncode != 0,
                (g3.stdout or g3.stderr).strip()[:120])
 
+        # 5) lure server (armed, dry-run) — a loopback visit triggers the bounded attacks
+        lure_log = ROOT / "hacker" / "lure_log.jsonl"
+        if lure_log.exists():
+            lure_log.unlink()
+        lure = subprocess.Popen(
+            [PY, str(ROOT / "hacker" / "lure_server.py"), "--port", "8099",
+             "--arm", "--confirm-lab", "--dry-run", "--duration", "5"],
+            cwd=str(ROOT), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            import requests
+            served = False
+            for _ in range(20):
+                try:
+                    r = requests.get("http://127.0.0.1:8099/", timeout=1)
+                    served = r.ok and b"Guest Portal" in r.content
+                    break
+                except Exception:
+                    time.sleep(0.25)
+            time.sleep(2)
+            launched = False
+            if lure_log.exists():
+                for line in lure_log.read_text().splitlines():
+                    if json.loads(line).get("action") == "attack_launched":
+                        launched = True
+            record("5. lure serves page on visit", served)
+            record("5. lure visit triggers bounded attack (dry-run)", launched)
+        finally:
+            lure.terminate()
+            try:
+                lure.wait(timeout=5)
+            except Exception:
+                lure.kill()
+
     finally:
         # 5) stop
         stop = subprocess.run([PY, str(CLIENT), "stop"], cwd=str(ROOT),
                               capture_output=True, text=True)
         time.sleep(0.5)
-        record("5. ports 8080/2121 free", port_free(8080) and port_free(2121))
+        record("6. ports 8080/2121 free", port_free(8080) and port_free(2121))
 
     print("\n==== HACKER RESULTS ====")
     for name, status, detail in RESULTS:

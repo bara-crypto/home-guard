@@ -123,6 +123,28 @@ def main() -> None:
                             Path(args.reports) / f"{prefix}_confusion.txt")
 
     trainer.save_model(model, feats, Path("models/rf_v1.joblib"), Path("models/features.json"))
+
+    # Isolation Forest: train on BENIGN flows from the train split only. The agent
+    # uses it to verify low-confidence / benign-labelled flows (anomaly => unknown threat).
+    benign_train = train_df[train_df["cls"] == "benign"]
+    if len(benign_train) >= 20:
+        if_X = trainer.clean_X(benign_train, feats)
+        iforest = trainer.train_isolation_forest(if_X)
+        trainer.save_iforest(iforest, feats, Path("models/iforest.joblib"),
+                             Path("models/iforest_features.json"))
+        # quick sanity: anomaly rate on held-out attack rows should be higher than on benign
+        try:
+            atk = test_df[test_df["cls"] != "benign"]
+            ben = test_df[test_df["cls"] == "benign"]
+            if len(atk) and len(ben):
+                ar = (iforest.predict(trainer.clean_X(atk, feats)) == -1).mean()
+                br = (iforest.predict(trainer.clean_X(ben, feats)) == -1).mean()
+                print(f"Isolation Forest anomaly rate — attacks: {ar:.2f}, benign: {br:.2f}")
+        except Exception as e:
+            print(f"(IF sanity check skipped: {e})")
+    else:
+        print("Not enough benign rows to train an Isolation Forest (need >=20); skipped.")
+
     print(f"\nPhase B macro-F1 ({args.test_run} held out): {macro_f1:.3f}")
     if args.demo:
         print("*** DEMO model saved as rf_v1. Replace with a real capture before any demo. ***")

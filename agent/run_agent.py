@@ -34,6 +34,9 @@ def main() -> None:
     ap.add_argument("--threshold", type=float, default=0.7)
     ap.add_argument("--no-sniff", action="store_true", help="API only; do not launch cicflowmeter")
     ap.add_argument("--port", type=int, default=PORT)
+    ap.add_argument("--api-host", default=HOST,
+                    help="interface uvicorn binds (default 127.0.0.1; use 0.0.0.0 so email "
+                         "'Confirm' links work from your phone/other LAN devices)")
     args = ap.parse_args()
 
     if not args.no_sniff and not args.iface:
@@ -47,7 +50,7 @@ def main() -> None:
 
     # 1) uvicorn API
     api_cmd = [sys.executable, "-m", "uvicorn", "agent.api:app",
-               "--host", HOST, "--port", str(args.port), "--log-level", "warning"]
+               "--host", args.api_host, "--port", str(args.port), "--log-level", "warning"]
     print("[agent] starting API:", " ".join(api_cmd))
     api = subprocess.Popen(api_cmd, cwd=str(ROOT), env=env)
     children.append(api)

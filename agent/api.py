@@ -1,29 +1,39 @@
-"""HomeGuard AI - Step 7: FastAPI inference agent (runs on Laptop A).
+"""HomeGuard AI - FastAPI inference + decision agent (runs on Laptop A).
 
 Endpoints:
-  GET  /health   -> {status, model, features, loaded}
-  POST /predict  -> accepts ONE flow dict (the shape cicflowmeter's HttpWriter POSTs:
-                    json=<single flow dict>) OR a JSON list of flow dicts.
-                    Returns [{label, confidence, src_ip, dst_ip, ts}].
-                    Appends every verdict to logs/verdicts.jsonl.
+  GET  /health            model + isolation-forest + channel status
+  POST /predict           one flow dict (cicflowmeter's POST shape) or a list.
+                          Classifies, runs the decision engine (notify / confirm /
+                          remediate / isolation-forest), logs verdicts, returns
+                          [{label, confidence, src_ip, dst_ip, ts, outcome}].
+  GET  /confirm?token=..&action=yes|no   confirm-link target (email buttons).
+  GET  /pending           current pending confirmations.
 
-Model dir resolves models/rf_v1.joblib + models/features.json (Phase B / live) and
-falls back to models/rf_phaseA.joblib + models/features_phaseA.json if that is all
-that exists. Set HOMEGUARD_MODEL_DIR to override.
+A background reaper expires pending confirmations after confirm_timeout_seconds
+(auto-remediating if configured). If Telegram is enabled, a background poller
+handles the inline Yes/No button callbacks.
 
-Run standalone:
-    uvicorn agent.api:app --host 127.0.0.1 --port 8001
-(run_agent.py launches this for you.)
+Model: models/rf_v1.joblib + features.json (Phase B / live), else rf_phaseA.*.
+Isolation forest: models/iforest.joblib (+ iforest_features.json or features.json).
+Set HOMEGUARD_MODEL_DIR to override the models directory.
 """
 from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import requests
 from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
+
+from agent.decision import DecisionEngine
+from agent.notify import Notifier
+from agent.settings import load_settings
 
 ROOT = Path(__file__).resolve().parent.parent
 MODEL_DIR = Path(os.environ.get("HOMEGUARD_MODEL_DIR", ROOT / "models"))
@@ -31,7 +41,8 @@ LOG_PATH = Path(os.environ.get("HOMEGUARD_VERDICT_LOG", ROOT / "logs" / "verdict
 
 app = FastAPI(title="HomeGuard AI agent")
 
-_STATE: dict[str, Any] = {"model": None, "features": None, "model_file": None}
+_STATE: dict[str, Any] = {"model": None, "features": None, "model_file": None,
+                          "settings": None, "notifier": None, "engine": None}
 
 
 def _resolve_model() -> tuple[Path, Path] | None:
@@ -59,19 +70,88 @@ def load_model() -> None:
     print(f"[agent] loaded {model_file} with {len(_STATE['features'])} features")
 
 
+def _reaper_loop() -> None:
+    engine: DecisionEngine = _STATE["engine"]
+    while True:
+        time.sleep(5)
+        try:
+            acted = engine.reap_expired()
+            for a in acted:
+                print("[agent] timeout -> " + json.dumps(a))
+        except Exception as e:
+            print(f"[agent] reaper error: {e}")
+
+
+def _telegram_poll_loop() -> None:
+    """Handle inline Yes/No callbacks. No inbound server needed."""
+    engine: DecisionEngine = _STATE["engine"]
+    tg = _STATE["settings"]["telegram"]
+    token = tg["bot_token"]
+    base = f"https://api.telegram.org/bot{token}"
+    offset = None
+    print("[agent] telegram poller started")
+    while True:
+        try:
+            params = {"timeout": 30}
+            if offset is not None:
+                params["offset"] = offset
+            r = requests.get(base + "/getUpdates", params=params, timeout=40)
+            for upd in r.json().get("result", []):
+                offset = upd["update_id"] + 1
+                cq = upd.get("callback_query")
+                if not cq:
+                    continue
+                data = cq.get("data", "")
+                approve = data.startswith("confirm:")
+                tok = data.split(":", 1)[1] if ":" in data else ""
+                res = engine.confirm(tok, approve)
+                answer = ("Dropping traffic from %s" % res.get("ip")) if approve else "Ignored"
+                try:
+                    requests.post(base + "/answerCallbackQuery",
+                                  json={"callback_query_id": cq["id"], "text": answer}, timeout=10)
+                    msg = cq.get("message", {})
+                    if msg:
+                        requests.post(base + "/editMessageText", json={
+                            "chat_id": msg["chat"]["id"], "message_id": msg["message_id"],
+                            "text": msg.get("text", "") + f"\n\n— {answer} ({res.get('status')})"},
+                            timeout=10)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[agent] telegram poll error: {e}")
+            time.sleep(5)
+
+
 @app.on_event("startup")
 def _startup() -> None:
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     load_model()
+    settings = load_settings()
+    notifier = Notifier(settings)
+    engine = DecisionEngine(settings, notifier, MODEL_DIR)
+    _STATE.update(settings=settings, notifier=notifier, engine=engine)
+
+    threading.Thread(target=_reaper_loop, daemon=True).start()
+    if notifier.telegram_enabled():
+        threading.Thread(target=_telegram_poll_loop, daemon=True).start()
 
 
 @app.get("/health")
 def health() -> dict:
+    eng: DecisionEngine | None = _STATE.get("engine")
+    notifier: Notifier | None = _STATE.get("notifier")
     return {
         "status": "ok",
         "model": _STATE.get("model_file"),
         "features": len(_STATE["features"]) if _STATE.get("features") else 0,
         "loaded": _STATE.get("model") is not None,
+        "isolation_forest": bool(eng and eng.iforest is not None),
+        "confirm_threshold": eng.threshold if eng else None,
+        "channels": {
+            "email": bool(notifier and notifier.email_enabled()),
+            "telegram": bool(notifier and notifier.telegram_enabled()),
+        },
+        "remediation": _STATE["settings"]["remediation"] if _STATE.get("settings") else None,
     }
 
 
@@ -85,8 +165,8 @@ def _predict_rows(flows: list[dict]) -> list[dict]:
         raise RuntimeError("No model loaded. Train Phase B (rf_v1) or Phase A first.")
 
     df = pd.DataFrame(flows)
-    X = df.reindex(columns=feats)
-    X = X.apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], 0).fillna(0)
+    X = df.reindex(columns=feats).apply(pd.to_numeric, errors="coerce")
+    X = X.replace([np.inf, -np.inf], 0).fillna(0)
 
     proba = model.predict_proba(X)
     classes = list(model.classes_)
@@ -104,6 +184,13 @@ def _predict_rows(flows: list[dict]) -> list[dict]:
     return out
 
 
+def _confirm_base(request: Request) -> str:
+    pub = (_STATE.get("settings") or {}).get("api_public_base") or ""
+    if pub:
+        return pub.rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
 @app.post("/predict")
 async def predict(request: Request):
     payload = await request.json()
@@ -115,8 +202,46 @@ async def predict(request: Request):
         return {"error": "payload must be a flow dict or a list of flow dicts"}
 
     verdicts = _predict_rows(flows)
+    engine: DecisionEngine | None = _STATE.get("engine")
+    base = _confirm_base(request)
 
     with LOG_PATH.open("a", encoding="utf-8") as fh:
-        for v in verdicts:
+        for v, flow in zip(verdicts, flows):
+            if engine is not None:
+                decision = engine.handle(flow, v["label"], v["confidence"], base)
+                v["outcome"] = decision.get("outcome")
+                if decision.get("token"):
+                    v["token"] = decision["token"]
             fh.write(json.dumps(v) + "\n")
     return verdicts
+
+
+@app.get("/confirm", response_class=HTMLResponse)
+def confirm(token: str, action: str = "yes"):
+    engine: DecisionEngine | None = _STATE.get("engine")
+    if engine is None:
+        return HTMLResponse("<h3>Agent not ready</h3>", status_code=503)
+    approve = str(action).lower() in ("yes", "y", "true", "1", "confirm")
+    res = engine.confirm(token, approve)
+    status = res.get("status")
+    color = "#c0392b" if approve else "#7f8c8d"
+    msg = {
+        "confirmed": f"Confirmed. Blocking traffic from {res.get('ip')}.",
+        "ignored": "Ignored. No action taken.",
+        "not_found": "This confirmation link is unknown or has expired.",
+    }.get(status, f"Status: {status}")
+    rem = res.get("remediation")
+    detail = f"<pre>{json.dumps(rem, indent=2)}</pre>" if rem else ""
+    return HTMLResponse(
+        f"<html><body style='font-family:sans-serif'>"
+        f"<h2 style='color:{color}'>HomeGuard</h2><p>{msg}</p>{detail}</body></html>")
+
+
+@app.get("/pending")
+def pending() -> dict:
+    engine: DecisionEngine | None = _STATE.get("engine")
+    if engine is None:
+        return {"pending": []}
+    return {"pending": [
+        {k: v for k, v in p.items() if k != "created"} for p in engine.pending.values()
+    ]}

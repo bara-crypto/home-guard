@@ -1,0 +1,1 @@
+"""HomeGuard AI agent package."""

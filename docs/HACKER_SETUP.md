@@ -63,6 +63,21 @@ python hacker\hacker_intent.py all        --target <A_IP> --confirm-lab --dry-ru
 Options: `--duration` seconds per phase (hard max **120**), `--speed slow|normal|fast`,
 `--threads` for dos (max **50**), `--dry-run`.
 
+## 4b. Lure server (optional — "visit a page, get attacked")
+
+`hacker/lure_server.py` hosts a normal-looking page; when **armed**, each private-IP
+visitor is attacked with the same bounded phases above (the server reads the visitor's
+IP and attacks back — there is no browser exploit). See `docs/MALICIOUS_SITE_LAB.md`
+for how it works and the Windows settings it needs.
+
+```powershell
+# serve only, attack nobody (safe default)
+python hacker\lure_server.py --port 8090
+# armed: attack each private-IP visitor
+python hacker\lure_server.py --port 8090 --arm --confirm-lab --duration 20
+```
+Then open `http://<B_IP>:8090/` on Laptop A. Visits are logged to `hacker\lure_log.jsonl`.
+
 ## 5. The log
 
 Every phase appends a JSON line to `hacker\hacker_log.jsonl`:
