@@ -3,9 +3,11 @@
 Laptop A runs the **target services** the hacker laptop attacks, **plus** the
 HomeGuard agent (sniffer + model). It never attacks anything.
 
-> Loopback note: Npcap does not capture Windows loopback by default, so a one-laptop
-> test only exercises the plumbing. Real detection is tested across two laptops (see
-> `docs/TEST_PLAN.md`).
+> Loopback note: on Windows, Npcap exposes a loopback capture device
+> (`\Device\NPF_Loopback`). A one-laptop (single-PC) test is now supported by
+> pointing the attacker at `127.0.0.1` and sniffing that device instead of Wi-Fi —
+> see the "Single-laptop mode" section in `docs/ATTACKER_PLAYBOOK.md`. The classic
+> two-laptop flow (agent sniffs Wi-Fi) still applies in `docs/TEST_PLAN.md`.
 
 ## 1. What to copy to Laptop A
 

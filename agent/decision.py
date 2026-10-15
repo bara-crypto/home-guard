@@ -6,17 +6,25 @@ For each flow the RF classifies, decide what to do:
     -> Isolation Forest verifies: anomaly => UNKNOWN THREAT (notify);
        normal => benign, silent.
   label is an attack (portscan/bruteforce/dos)?
-    confidence >= confirm_threshold -> KNOWN THREAT: ask to confirm (email/telegram).
-       "Yes" (or timeout auto-remediate) -> block the attacker IP ("drop the packet").
+    confidence >= confirm_threshold -> KNOWN THREAT (notify).
+       A pending token is created; "Yes" (or timeout auto-remediate) blocks the IP.
     confidence <  confirm_threshold -> Isolation Forest verifies:
        anomaly => UNKNOWN THREAT (notify); normal => benign, silent.
+
+Notification policy: exactly ONE small heads-up email is sent per agent run - on the
+first threat detected (known or unknown). No confirm links, no Telegram.
+
+When an unknown threat is raised, the agent prints the Isolation Forest verdict
+(new threat / benign / unavailable). For an anomaly or an unavailable IF it also
+prints "Sending to cloud for help" (placeholder - nothing leaves the machine); the
+verdict and the cloud flag are saved in the decision log.
 
 A per-(ip, category) cooldown stops an attack's many flows from sending a flood of
 alerts. Pending confirmations expire after confirm_timeout_seconds; if
 auto_remediate_on_timeout is set, they are then remediated automatically.
 
 No data leaves the machine (no cloud) - unknown threats are only reported locally
-and by email/telegram, as requested.
+and by a single email, as requested.
 """
 from __future__ import annotations
 
@@ -39,6 +47,12 @@ ATTACK_DESCRIPTIONS = {
     "unknown": "Anomalous traffic that does not match learned normal behaviour.",
 }
 
+# When the Isolation Forest confirms a flow is a NEW threat (an anomaly), the
+# agent would want to ask the cloud for help. That is intentionally NOT done (no
+# data leaves the machine); this string is a local placeholder so the intent is
+# visible in the terminal and the decision log.
+CLOUD_HELP_MESSAGE = "Sending to cloud for help"
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -60,6 +74,7 @@ class DecisionEngine:
         self.pending: dict[str, dict] = {}           # token -> record
         self.iforest = None
         self.iforest_features: list[str] | None = None
+        self._run_email_sent = False   # one "heads-up" email per agent run
         self._load_iforest()
 
     # ---------------- isolation forest ----------------
@@ -112,6 +127,16 @@ class DecisionEngine:
         with DECISION_LOG.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec) + "\n")
 
+    def _claim_run_email(self) -> bool:
+        """Return True only for the FIRST threat detected in this agent run.
+
+        Callers must already hold self._lock. Exactly one small heads-up email is
+        sent per run (whichever threat - known or unknown - is seen first)."""
+        if self._run_email_sent:
+            return False
+        self._run_email_sent = True
+        return True
+
     # ---------------- main entry ----------------
     def handle(self, flow: dict, label: str, confidence: float, confirm_base: str) -> dict:
         src = flow.get("src_ip")
@@ -123,13 +148,14 @@ class DecisionEngine:
             if label == "benign":
                 anomaly = self._is_anomaly(flow)
                 if anomaly:
-                    outcome = self._emit_unknown(flow, rec, reason="benign-labelled but IF flagged anomaly")
+                    outcome = self._emit_unknown(flow, rec, reason="benign-labelled but IF flagged anomaly",
+                                                 if_result=anomaly)
                 else:
                     outcome = {"outcome": "benign_silent",
                                "note": "benign (IF normal)" if anomaly is False else "benign (IF n/a)"}
             else:
                 if confidence >= self.threshold:
-                    outcome = self._emit_confirm(flow, label, confidence, rec, confirm_base)
+                    outcome = self._emit_confirm(flow, label, confidence, rec)
                 else:
                     anomaly = self._is_anomaly(flow)
                     if anomaly is False:
@@ -138,13 +164,14 @@ class DecisionEngine:
                     else:  # anomaly True, or IF unavailable -> report as unknown
                         why = "low-confidence attack, IF anomaly" if anomaly else \
                               "low-confidence attack, IF unavailable"
-                        outcome = self._emit_unknown(flow, rec, reason=why)
+                        outcome = self._emit_unknown(flow, rec, reason=why,
+                                                     if_result=anomaly)
 
         rec.update(outcome)
         self._log(rec)
         return rec
 
-    def _emit_confirm(self, flow, label, confidence, rec, confirm_base) -> dict:
+    def _emit_confirm(self, flow, label, confidence, rec) -> dict:
         src = flow.get("src_ip")
         if self._cooled_down(src, label):
             return {"outcome": "known_threat_confirm", "notified": False,
@@ -155,39 +182,45 @@ class DecisionEngine:
             "label": label, "confidence": round(float(confidence), 3),
             "created": time.monotonic(), "created_iso": _now_iso(), "status": "pending",
         }
-        desc = ATTACK_DESCRIPTIONS.get(label, label)
-        subject = f"[HomeGuard] {label.upper()} detected ({confidence:.0%} confidence)"
-        body = (f"HomeGuard detected a likely {label.upper()} attack.\n\n"
-                f"Attacker IP : {src}\nTarget IP   : {flow.get('dst_ip')}\n"
-                f"Confidence  : {confidence:.1%}\nWhat it is  : {desc}\n\n"
-                f"Approve to DROP all traffic from {src} (block its IP). "
-                f"If you don't respond within {int(self.confirm_timeout)}s, "
-                f"{'the system will auto-remediate.' if self.auto_remediate else 'no action is taken.'}")
-        confirm_url = f"{confirm_base}/confirm?token={token}&action=yes"
-        ignore_url = f"{confirm_base}/confirm?token={token}&action=no"
-        self.notifier.send_telegram(
-            f"<b>{subject}</b>\n\nAttacker: <code>{src}</code>\nTarget: <code>{flow.get('dst_ip')}</code>\n"
-            f"Confidence: {confidence:.1%}\n{desc}\n\nApprove to drop traffic from {src}.",
-            token=token,
-        )
-        self.notifier.send_email(subject, body, confirm_url=confirm_url, ignore_url=ignore_url)
+        # One small heads-up email per run (no Yes/No confirm links).
+        if self._claim_run_email():
+            subject = f"[HomeGuard] Threat detected: {label.upper()}"
+            body = (f"HomeGuard detected a {label.upper()} attack.\n\n"
+                    f"Source IP  : {src}\nTarget IP  : {flow.get('dst_ip')}\n"
+                    f"Confidence : {confidence:.1%}\nTime       : {_now_iso()}\n\n"
+                    f"One-time alert for this session. No automatic action taken.")
+            self.notifier.send_email(subject, body)
         return {"outcome": "known_threat_confirm", "notified": True, "token": token}
 
-    def _emit_unknown(self, flow, rec, reason: str) -> dict:
+    def _emit_unknown(self, flow, rec, reason: str, if_result: bool | None = None) -> dict:
         src = flow.get("src_ip")
         if self._cooled_down(src, "unknown"):
             return {"outcome": "unknown_threat", "notified": False,
                     "note": "suppressed by cooldown", "reason": reason}
-        subject = "[HomeGuard] UNKNOWN THREAT detected"
-        body = (f"HomeGuard saw traffic it cannot classify as a known attack, but it is "
-                f"NOT normal.\n\nSource IP : {src}\nTarget IP : {flow.get('dst_ip')}\n"
-                f"Reason    : {reason}\n\n{ATTACK_DESCRIPTIONS['unknown']}\n\n"
-                f"No automatic action taken. This is informational only "
-                f"(not sent to the cloud).")
-        self.notifier.send_telegram(
-            f"<b>{subject}</b>\n\nSource: <code>{src}</code>\nTarget: <code>{flow.get('dst_ip')}</code>\n"
-            f"Reason: {reason}\nUnknown/anomalous traffic. No auto-action.")
-        self.notifier.send_email(subject, body)
+        # Report the Isolation Forest verdict for this unknown threat. Only an
+        # anomaly (True) or an unavailable IF (None) is escalated to the cloud;
+        # a "normal" result (False) is the ordinary flow and prints nothing.
+        if if_result is True:
+            verdict, if_key = "new threat (anomaly)", "anomaly"
+        elif if_result is False:
+            verdict, if_key = "benign (normal)", "normal"
+        else:
+            verdict, if_key = "unavailable (not confirmed)", "unavailable"
+        rec["if_result"] = if_key
+        if if_result is not False:
+            # Ask the cloud for help. Placeholder only - nothing leaves the machine.
+            print("[decision] " + CLOUD_HELP_MESSAGE)
+            rec["cloud"] = "sending_for_help"
+            print(f"[decision] Isolation Forest: {verdict} | "
+                  f"rf={rec.get('rf_label')} conf={float(rec.get('confidence', 0.0)):.2f}")
+        # One small heads-up email per run (no Yes/No confirm links).
+        if self._claim_run_email():
+            subject = "[HomeGuard] Threat detected: UNKNOWN"
+            body = (f"HomeGuard detected an UNKNOWN threat.\n\n"
+                    f"Source IP  : {src}\nTarget IP  : {flow.get('dst_ip')}\n"
+                    f"Reason     : {reason}\nTime       : {_now_iso()}\n\n"
+                    f"One-time alert for this session. No automatic action taken.")
+            self.notifier.send_email(subject, body)
         return {"outcome": "unknown_threat", "notified": True, "reason": reason}
 
     # ---------------- confirmation + timeout ----------------

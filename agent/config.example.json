@@ -12,6 +12,18 @@
     "_comment": "dry_run=true -> the agent logs the firewall command it WOULD run and never changes the system. Set false to actually block the attacker IP (netsh on Windows / iptables on Linux). Only private/loopback IPs are ever eligible."
   },
 
+  "dashboard": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8010,
+    "_comment": "Local dashboard UI, auto-started by run_agent.py. Login is username-only: the username must equal this machine's router (default-gateway) IP, which is detected automatically (override with HOMEGUARD_ROUTER_IP). Bind 127.0.0.1 keeps it local; use 0.0.0.0 only if you accept exposing it to your LAN."
+  },
+
+  "trigger_gate": false,
+  "alert_window_seconds": 300,
+  "lure_log": "hacker/lure_log.jsonl",
+  "_comment_trigger": "Single-laptop demo: when true, the agent stays QUIET (no alerts/notifications/dashboard) until the lure website is actually triggered. run_agent.py sets this for its API child automatically; it watches lure_log for an 'attack_launched' line and arms detection for alert_window_seconds. Leave false for 2-laptop / standalone use.",
+
   "email": {
     "enabled": false,
     "smtp_host": "smtp.gmail.com",
@@ -20,7 +32,7 @@
     "password": "your_16_char_app_password",
     "from": "your_gmail_address@gmail.com",
     "to": "balac6796@gmail.com",
-    "_comment": "Gmail requires a 16-char App Password (Google Account > Security > App passwords), not your normal password. For the email 'Confirm' link to be clickable from another device, run the agent with --api-host 0.0.0.0 and set api_public_base to http://<laptopA_LAN_ip>:8001."
+    "_comment": "Gmail requires a 16-char App Password (Google Account > Security > App passwords), not your normal password. When enabled, the agent sends ONE small 'Threat detected' email per run (first known or unknown threat) to 'to'. 'from' should equal 'user' for Gmail."
   },
 
   "telegram": {

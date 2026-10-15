@@ -27,7 +27,7 @@ homeguard/
 ├─ src/              # 01_download, 02_explore, 03_learn_features, 03_train, 04_train_lab, trainer
 ├─ lab/              # capture.py, convert.py, run_cicflowmeter.py (extractor wrapper)
 ├─ agent/            # api.py, run_agent.py, infer.py, decision.py, notify.py,
-│                    #   remediate.py, settings.py, config.example.json  (Laptop A)
+│                    #   dashboard.py, remediate.py, settings.py, config.example.json (Laptop A)
 ├─ client/           # client_intent.py  (Laptop A, standalone)
 ├─ hacker/           # hacker_intent.py + lure_server.py  (Laptop B, standalone)
 ├─ tests/            # verify_client.py, verify_hacker.py
@@ -51,6 +51,15 @@ only. Remediation is **dry-run by default**. Full details: `docs/DETECTION_PIPEL
 Notifications and remediation are config-driven (`agent/config.example.json` →
 `agent/config.json`); with nothing configured the agent runs log-only so it's fully
 testable without secrets.
+
+## Agent dashboard
+
+`agent/run_agent.py` also starts a local read-only dashboard at
+`http://127.0.0.1:8010` (auto, port via `--dashboard-port` / `--no-dashboard`).
+Sign in with **username only** = this machine's **router (default-gateway) IP**
+(shown as a hint on the page; override with `HOMEGUARD_ROUTER_IP`). It summarises the
+**last 30 minutes** of attacks (by type/source, per-minute sparkline, last 20 attacks)
+from `logs/verdicts.jsonl`, refreshing every 3 s.
 
 ## Quick start (dev machine)
 

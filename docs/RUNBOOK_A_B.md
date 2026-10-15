@@ -6,6 +6,11 @@ if you have one, do the training there — otherwise do it on A.)
 
 Legend: 🅰 = run on Laptop A, 🅱 = run on Laptop B, 🅰+🅱 = coordinated.
 
+> **Single-laptop option:** A and B can be the *same* laptop. Target the attacks at
+> `127.0.0.1` and sniff the Npcap loopback device (`python lab\find_loopback.py`), use
+> `python lab\convert.py --single-laptop`, and skip §0's hotspot/firewall steps. Full
+> sequence: `docs\ATTACKER_PLAYBOOK.md` → "Single-laptop mode".
+
 ---
 
 ## 0. One-time setup on each laptop

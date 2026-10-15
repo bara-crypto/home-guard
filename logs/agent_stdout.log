@@ -1,0 +1,3 @@
+[agent] starting API: D:\Users\balac\Chennai Hack\Home Guard V2\home_gaurd\.venv\Scripts\python.exe -m uvicorn agent.api:app --host 127.0.0.1 --port 8001 --log-level warning
+[agent] health: {'status': 'ok', 'model': 'D:\\Users\\balac\\Chennai Hack\\Home Guard V2\\home_gaurd\\models\\rf_v1.joblib', 'features': 78, 'loaded': True, 'isolation_forest': True, 'confirm_threshold': 0.8, 'channels': {'email': False, 'telegram': False}, 'remediation': {'enabled': True, 'dry_run': True}}
+[agent] starting dashboard: D:\Users\balac\Chennai Hack\Home Guard V2\home_gaurd\.venv\Scripts\python.exe -m uvicorn agent.dashboard:app --host 127.0.0.1 --port 8010 --log-level warning

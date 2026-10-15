@@ -9,42 +9,59 @@ RF classifies a flow → (label, confidence)
 
 ┌── label == benign ────────────────────────────────────────────────┐
 │   Isolation Forest verifies the flow:                              │
-│     anomaly  → UNKNOWN THREAT  → email/telegram "unknown threat"   │
+│     anomaly  → UNKNOWN THREAT  → email "threat detected" (once/run)│
 │     normal   → benign, SILENT (normal process, no alert)           │
 └────────────────────────────────────────────────────────────────────┘
 
 ┌── label is an attack (portscan / bruteforce / dos) ───────────────┐
 │   confidence ≥ 80%  → KNOWN THREAT                                 │
-│        → send confirm email + telegram (Yes / No)                  │
+│        → pending token (manual /confirm can DROP the attacker IP)  │
 │        → "Yes"  → identify + DROP (block attacker IP)              │
 │        → timeout → auto-remediate IF enabled, else no action       │
 │   confidence < 80%  → uncertain → Isolation Forest verifies:       │
-│        anomaly → UNKNOWN THREAT → email/telegram "unknown threat"  │
+│        anomaly → UNKNOWN THREAT → email "threat detected" (once)   │
 │        normal  → benign, SILENT                                    │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
+- **Notification policy: exactly ONE small heads-up email per agent run** — sent on
+  the *first* threat detected (known **or** unknown), addressed to the configured
+  `email.to`. No confirm links, no Telegram. Restarting the agent starts a new run
+  (and a new email). Everything is still appended to `logs/decisions.jsonl`.
 - **Benign verified by Isolation Forest → no email, normal process.**
-- **Known threat → confirm email; on "Yes" the packet source is dropped.**
-- **Unknown threat → informational email only.** Nothing is sent to the cloud (by
-  design, for now): the agent just identifies it and tells you.
+- **Known threat → pending token; on "Yes" (via `/confirm`) the source is dropped.**
+- **Unknown threat → informational email only, plus a terminal verdict.** For every
+  unknown threat the agent prints the **Isolation Forest verdict** — e.g.
+  `[decision] Isolation Forest: new threat (anomaly) | rf=dos conf=0.55`. When the
+  verdict is an **anomaly** (or the IF is **unavailable**), it also prints
+  `[decision] Sending to cloud for help` and records `"cloud": "sending_for_help"`;
+  a verdict of *benign (normal)* is the ordinary path and prints nothing. The verdict
+  is saved as `"if_result"` (`anomaly` / `normal` / `unavailable`) and the cloud flag
+  as `"cloud"` in `logs/decisions.jsonl`.
+  This is a **placeholder for a future cloud lookup — nothing is actually sent to the
+  cloud** (by design, for now): the agent just identifies it and tells you.
+- **Dashboard:** unknown threats appear in **Recent attacks** with an `unknown` badge
+  (in the **Type** column) and their Isolation Forest result in the **IF** column.
+  Counters: **Unknown threats** and **Cloud help** (both count every unknown threat),
+  an **Emails sent** card, and a **Notifications** panel showing the recipient
+  (`email.to`), emails sent this session, and the last email's subject/time/status.
 
 The `confirm_threshold` (default 0.80) and every other knob live in
 `agent/config.json` (copy from `agent/config.example.json`).
 
 ## Notifications
 
-Two channels, both optional and config-driven. With neither configured, the agent
-runs **log-only** (writes `logs/notifications.jsonl`) so everything is testable
-without secrets.
+Optional and config-driven. With it unconfigured, the agent runs **log-only** (writes
+`logs/notifications.jsonl`) so everything is testable without secrets.
 
-| Channel | Confirm action | Needs |
+| Channel | What it does | Needs |
 |---|---|---|
-| **Telegram** (recommended) | inline **Yes / No** buttons, handled by a built-in poller — no inbound server | a bot token + chat id from `@BotFather` |
-| **Email** | **Confirm / Ignore** links that hit the agent's `/confirm` endpoint | SMTP (Gmail App Password); agent reachable from where you read mail (run with `--api-host 0.0.0.0` and set `api_public_base`) |
+| **Email** | **one small "Threat detected" heads-up per agent run** (first known *or* unknown threat); no confirm links | SMTP (Gmail App Password) in `agent/config.json`; `email.to` is the recipient |
+| **Telegram** | *(optional, disabled in the demo)* inline **Yes / No** buttons via a built-in poller | a bot token + chat id from `@BotFather` |
 
-Alert contents: attack label, **confidence score**, attacker/target IP, and a
-plain-language description of the attack.
+Alert contents: attack label (or UNKNOWN), attacker/target IP, **confidence score**
+(known threats), and a one-line reason (unknown threats). The email is sent at most
+once per run; further detections in the same run are logged but do not email.
 
 ## Remediation = "drop the packet"
 
@@ -58,6 +75,25 @@ packets from that source.
 - Only **loopback / RFC1918 private** IPs are ever eligible — it will never block a
   public IP.
 - True per-packet inline drop (vs. host firewall) needs gateway mode — roadmap.
+
+## Trigger gate (wait for the lure)
+
+In the single-laptop demo the agent would otherwise classify *all* loopback traffic
+(the client's benign traffic and the agent's own dashboard/API traffic) and could
+alert before you do anything. To keep the demo clean, `run_agent.py` enables a
+**lure-trigger gate**: the agent keeps sniffing (so the sub-second port-scan burst is
+never missed) but stays **quiet** — no `ALERT`, no notifications, nothing logged to
+the dashboard — until the lure actually launches an attack.
+
+- `run_agent.py` watches `hacker/lure_log.jsonl` for an `{"action": "attack_launched"}`
+  line, then calls the agent's `POST /arm` endpoint, which opens a detection window
+  (`alert_window_seconds`, default 300). Each new lure visit re-arms it.
+- While un-armed, `POST /predict` records each flow with
+  `outcome: "quiet_until_trigger"` and takes no action; the dashboard ignores those
+  and only shows the current session (since the agent started).
+- Off by default in `agent/config.json` (`trigger_gate: false`) so tests and the
+  2-laptop setup are unchanged; the single-laptop launcher turns it on. Disable with
+  `--no-trigger-gate`.
 
 ## Isolation Forest (unknown-threat detector)
 

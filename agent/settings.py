@@ -22,6 +22,15 @@ DEFAULTS = {
     "confirm_timeout_seconds": 120,     # wait this long for a Yes before auto-remediating
     "auto_remediate_on_timeout": False, # product vision: confirm-first, auto-fix on timeout
     "remediation": {"enabled": True, "dry_run": True},  # dry_run=True -> log only, never block
+    # Local dashboard UI (auto-started by run_agent.py). Login is username-only:
+    # the username must equal this machine's router (default-gateway) IP.
+    "dashboard": {"enabled": True, "host": "127.0.0.1", "port": 8010},
+    # Lure-trigger gate (single-laptop demo). When enabled, the agent stays QUIET
+    # (no alerts / notifications / dashboard entries) until the lure website is
+    # actually triggered by the user. run_agent.py enables this for its API child.
+    "trigger_gate": False,
+    "alert_window_seconds": 300,        # how long after a lure trigger detection stays active
+    "lure_log": str(HERE.parent / "hacker" / "lure_log.jsonl"),  # watched for "attack_launched"
     "email": {
         "enabled": False,
         "smtp_host": "smtp.gmail.com",
@@ -50,7 +59,7 @@ def _deep_merge(base: dict, over: dict) -> dict:
 
 def _env_overrides() -> dict:
     e = os.environ
-    o: dict = {"email": {}, "telegram": {}, "remediation": {}}
+    o: dict = {"email": {}, "telegram": {}, "remediation": {}, "dashboard": {}}
 
     def setif(key, cast=str):
         if key in e and e[key] != "":
@@ -75,6 +84,12 @@ def _env_overrides() -> dict:
         "HOMEGUARD_TELEGRAM_TOKEN": ("telegram", "bot_token", str),
         "HOMEGUARD_TELEGRAM_CHAT": ("telegram", "chat_id", str),
         "HOMEGUARD_API_PUBLIC_BASE": (None, "api_public_base", str),
+        "HOMEGUARD_DASHBOARD_ENABLED": ("dashboard", "enabled", _bool),
+        "HOMEGUARD_DASHBOARD_HOST": ("dashboard", "host", str),
+        "HOMEGUARD_DASHBOARD_PORT": ("dashboard", "port", int),
+        "HOMEGUARD_TRIGGER_GATE": (None, "trigger_gate", _bool),
+        "HOMEGUARD_ALERT_WINDOW_SECS": (None, "alert_window_seconds", float),
+        "HOMEGUARD_LURE_LOG": (None, "lure_log", str),
     }.items():
         val = setif(env_key, cast)
         if val is None:

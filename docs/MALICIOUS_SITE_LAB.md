@@ -40,6 +40,11 @@ malware.
 > It stays within your three-laptop lab. Don't point the armed lure at any network or
 > device you don't own.
 
+> **Single-laptop:** run the lure on the same PC and just browse to
+> `http://127.0.0.1:8090/`. The visitor is `127.0.0.1` (accepted, since loopback is
+> private) and the agent sniffs `\Device\NPF_Loopback`. See
+> `docs\ATTACKER_PLAYBOOK.md` → "Single-laptop mode".
+
 ## What to turn off / adjust on Windows before this works
 
 You do **not** need to disable Windows Defender antivirus. Make these minimal,

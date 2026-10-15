@@ -42,7 +42,20 @@ LOG_PATH = Path(os.environ.get("HOMEGUARD_VERDICT_LOG", ROOT / "logs" / "verdict
 app = FastAPI(title="HomeGuard AI agent")
 
 _STATE: dict[str, Any] = {"model": None, "features": None, "model_file": None,
-                          "settings": None, "notifier": None, "engine": None}
+                          "settings": None, "notifier": None, "engine": None,
+                          "trigger_gate": False, "alert_window_secs": 300.0,
+                          "armed_until": float("inf")}
+
+
+def _armed() -> bool:
+    """True when detection/alerting is active.
+
+    With the lure-trigger gate OFF (the default, e.g. tests / 2-laptop), the agent
+    is always armed. With it ON, the agent stays quiet until POST /arm is called
+    (run_agent.py calls it when the lure website is actually triggered)."""
+    if not _STATE.get("trigger_gate"):
+        return True
+    return time.time() <= float(_STATE.get("armed_until", 0.0))
 
 
 def _resolve_model() -> tuple[Path, Path] | None:
@@ -129,7 +142,13 @@ def _startup() -> None:
     settings = load_settings()
     notifier = Notifier(settings)
     engine = DecisionEngine(settings, notifier, MODEL_DIR)
-    _STATE.update(settings=settings, notifier=notifier, engine=engine)
+    gate = bool(settings.get("trigger_gate", False))
+    _STATE.update(settings=settings, notifier=notifier, engine=engine,
+                  trigger_gate=gate,
+                  alert_window_secs=float(settings.get("alert_window_seconds", 300)),
+                  armed_until=0.0 if gate else float("inf"))
+    if gate:
+        print("[agent] lure-trigger gate ON: staying quiet until the lure is triggered.")
 
     threading.Thread(target=_reaper_loop, daemon=True).start()
     if notifier.telegram_enabled():
@@ -147,6 +166,8 @@ def health() -> dict:
         "loaded": _STATE.get("model") is not None,
         "isolation_forest": bool(eng and eng.iforest is not None),
         "confirm_threshold": eng.threshold if eng else None,
+        "trigger_gate": bool(_STATE.get("trigger_gate")),
+        "armed": _armed(),
         "channels": {
             "email": bool(notifier and notifier.email_enabled()),
             "telegram": bool(notifier and notifier.telegram_enabled()),
@@ -204,16 +225,36 @@ async def predict(request: Request):
     verdicts = _predict_rows(flows)
     engine: DecisionEngine | None = _STATE.get("engine")
     base = _confirm_base(request)
+    armed = _armed()
 
     with LOG_PATH.open("a", encoding="utf-8") as fh:
         for v, flow in zip(verdicts, flows):
-            if engine is not None:
+            if engine is not None and armed:
                 decision = engine.handle(flow, v["label"], v["confidence"], base)
                 v["outcome"] = decision.get("outcome")
                 if decision.get("token"):
                     v["token"] = decision["token"]
+                if decision.get("if_result"):
+                    v["if_result"] = decision["if_result"]
+                if decision.get("cloud"):
+                    v["cloud"] = decision["cloud"]
+            else:
+                # Lure-trigger gate: not armed yet -> record quietly, no action.
+                v["outcome"] = "quiet_until_trigger"
             fh.write(json.dumps(v) + "\n")
     return verdicts
+
+
+@app.post("/arm")
+def arm(window: float | None = None):
+    """Arm detection for the next `window` seconds (called when the lure triggers).
+
+    No-op effect when the trigger gate is disabled (the agent is always armed)."""
+    win = float(window) if window is not None else float(_STATE.get("alert_window_secs", 300))
+    _STATE["armed_until"] = time.time() + win
+    print(f"[agent] armed for {int(win)}s (lure trigger)")
+    return {"armed": True, "armed_until": _STATE["armed_until"], "window": win,
+            "trigger_gate": bool(_STATE.get("trigger_gate"))}
 
 
 @app.get("/confirm", response_class=HTMLResponse)

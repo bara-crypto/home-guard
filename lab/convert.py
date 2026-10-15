@@ -7,11 +7,14 @@ For every data/captured/<label>/run<N>.pcap:
       * attack folder + --attacker-ip -> flows whose src_ip OR dst_ip equals the
         attacker IP get the folder's class; all OTHER flows get 'benign'
         (so background traffic in an attack capture is not mislabelled).
+      * attack folder + --single-laptop -> both endpoints are 127.0.0.1, so label
+        by destination/source port instead (2121=bruteforce, 8080=dos, 1-1024=portscan).
   - add label, run_id (=<label>/run<N>) and source pcap columns.
 Merge everything to data/processed/lab_flows.parquet.
 
 Usage:
-    python lab/convert.py --attacker-ip 10.42.0.23
+    python lab/convert.py --attacker-ip 10.42.0.23      # two-laptop (LAN) capture
+    python lab/convert.py --single-laptop               # single-laptop (loopback) capture
     python lab/convert.py --captured data/captured --out data/processed/lab_flows.parquet
 """
 import argparse
@@ -21,6 +24,36 @@ from pathlib import Path
 
 LABELS = ("benign", "portscan", "bruteforce", "dos")
 WRAPPER = Path(__file__).resolve().parent / "run_cicflowmeter.py"
+
+# Single-laptop mode: attack traffic is all loopback (127.0.0.1), so we separate
+# attack flows from background by the service port they hit.
+SERVICE_PORTS = {"bruteforce": {2121}, "dos": {8080}}
+
+
+def label_single_laptop(df, label: str):
+    """Label a single-laptop (loopback) attack capture by service port.
+
+    bruteforce -> dst/src port 2121; dos -> 8080; portscan -> a scanned port in
+    1-1024 that is not one of the service ports. Everything else is benign.
+    """
+    import pandas as pd
+
+    def row_label(row) -> str:
+        if label == "portscan":
+            scanned = False
+            for col in ("dst_port", "src_port"):
+                v = row.get(col)
+                if pd.notna(v) and 1 <= int(v) <= 1024 and int(v) not in (2121, 8080):
+                    scanned = True
+            return "portscan" if scanned else "benign"
+        ports = SERVICE_PORTS[label]
+        for col in ("dst_port", "src_port"):
+            v = row.get(col)
+            if pd.notna(v) and int(v) in ports:
+                return label
+        return "benign"
+
+    return df.apply(row_label, axis=1)
 
 
 def convert_pcap(pcap: Path, csv: Path) -> bool:
@@ -43,6 +76,8 @@ def main() -> None:
     ap.add_argument("--out", default="data/processed/lab_flows.parquet")
     ap.add_argument("--attacker-ip", default=None,
                     help="IP of Laptop B; required to label attack folders correctly")
+    ap.add_argument("--single-laptop", action="store_true",
+                    help="label loopback captures by service port instead of attacker IP")
     args = ap.parse_args()
 
     import pandas as pd
@@ -56,21 +91,30 @@ def main() -> None:
         for pcap in sorted(folder.glob("run*.pcap")):
             run_id = f"{label}/{pcap.stem}"
             csv = pcap.with_suffix(".csv")
-            if not csv.exists() or csv.stat().st_mtime < pcap.stat().st_mtime:
+            # Re-extract if the CSV is missing, empty (a crashed prior run can
+            # leave a 0-byte file), or older than the pcap.
+            stale = (not csv.exists()) or csv.stat().st_size == 0 or csv.stat().st_mtime < pcap.stat().st_mtime
+            if stale:
                 if not convert_pcap(pcap, csv):
                     print(f"  skipped {pcap} (no flows)")
                     continue
-            df = pd.read_csv(csv)
+            try:
+                df = pd.read_csv(csv)
+            except pd.errors.EmptyDataError:
+                print(f"  skipped {pcap} (empty csv)")
+                continue
             if df.empty:
                 print(f"  {run_id}: 0 flows")
                 continue
 
             if label == "benign":
                 df["label"] = "benign"
+            elif args.single_laptop:
+                df["label"] = label_single_laptop(df, label)
             else:
                 if not args.attacker_ip:
                     raise SystemExit(
-                        f"Folder '{label}' needs --attacker-ip to label attack flows."
+                        f"Folder '{label}' needs --attacker-ip (or --single-laptop) to label attack flows."
                     )
                 ip = args.attacker_ip
                 is_attack = (df.get("src_ip") == ip) | (df.get("dst_ip") == ip)

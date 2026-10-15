@@ -76,10 +76,28 @@ Also browse normally on A to check for false alarms.
 - Keep a recorded pcap of each attack (`data\captured\...`) as a stage fallback — you can
   replay detection offline with `python lab\convert.py` + `python agent\infer.py <csv>`.
 
+## 6b. Single-laptop alternative (client + attacker on one PC)
+
+You can run the whole capture/train/detect flow on one laptop. Attacker target is
+`127.0.0.1` and the agent/capture sniff the Npcap loopback device (find it with
+`python lab\find_loopback.py`, usually `\Device\NPF_Loopback`). No hotspot or inbound
+firewall rules are needed.
+
+```powershell
+python client\client_intent.py serve
+# capture (per class, 3 runs) then attack with --target 127.0.0.1
+python lab\capture.py --iface "\Device\NPF_Loopback" --label dos --run 1 --duration 120
+python hacker\hacker_intent.py dos --target 127.0.0.1 --confirm-lab --duration 60
+python lab\convert.py --single-laptop      # labels by port (2121/8080/1-1024)
+python src\04_train_lab.py
+python agent\run_agent.py --iface "\Device\NPF_Loopback" --threshold 0.7
+```
+See `docs\ATTACKER_PLAYBOOK.md` → "Single-laptop mode" for the full sequence.
+
 ## 7. Notes / limitations
 
 - On a plain Wi-Fi hotspot a laptop only sees its own traffic, so the agent runs **on the
   victim (A)** — "device-agent mode". Gateway mode (sniffing all hotspot traffic) is a
   roadmap item; you can approximate it by sharing the hotspot *from* A.
-- Loopback is not captured by Npcap by default, so single-laptop tests only check the
-  plumbing — real detection is this two-laptop flow.
+- Loopback is not captured on a *default* Npcap install, but Npcap's
+  `\Device\NPF_Loopback` device does capture it — see §6b for the single-laptop flow.

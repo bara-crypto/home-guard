@@ -1,0 +1,5 @@
+pred->    benign  brutefor       dos  portscan
+ benign        12         0        43         0
+brutefo         0        28         0         0
+    dos         8       365      8762         0
+portsca         0         0         0       198
